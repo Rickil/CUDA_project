@@ -1,6 +1,6 @@
 #include "image.hh"
 #include "pipeline.hh"
-#include "fix_cpu.cuh"
+//#include "fix_cpu.cuh"
 #include "fix_gpu.cuh"
 
 #include <vector>
@@ -47,16 +47,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You must get the image from the pipeline as they arrive and launch computations right away
         // There are still ways to speeds this process of course (wait for last class)
         Image img = pipeline.get_image(i);
-        int* d_buffer;
-        cudaMalloc(&d_buffer, img.size() * sizeof(int));
-        cudaMemcpy(d_buffer, img.buffer, img.size() * sizeof(int), cudaMemcpyHostToDevice);
 
-        int blockSize = 256;
-        int gridSize = (img.size() + blockSize - 1) / blockSize;
-        fix_image_gpu<<<gridSize, blockSize>>>(d_buffer, img.size());
-        cudaMemcpy(img.buffer, d_buffer, img.size() * sizeof(int), cudaMemcpyDeviceToHost);
-        images[i] = img;
-        cudaFree(d_buffer);
+        images[i] = fix_image_gpu(img);
         //fix_image_cpu(images[i]);
     }
 

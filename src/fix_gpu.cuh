@@ -2,7 +2,8 @@
 #define PROJECT_STUDENT_FIX_GPU_CUH
 
 #include "image.hh"
+#include <iostream>
 
-__global__ void fix_image_gpu(int* buffer, int image_size);
+Image fix_image_gpu(Image image);
 
 #endif //PROJECT_STUDENT_FIX_GPU_CUH
