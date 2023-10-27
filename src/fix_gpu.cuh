@@ -3,6 +3,7 @@
 
 #include "image.hh"
 #include <iostream>
+#include <numeric>
 
 Image fix_image_gpu(Image image);
 

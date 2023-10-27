@@ -7,20 +7,43 @@ __global__ void predicate_kernel(int* buffer, int* predicate, int size, int garb
     }
 }
 
-__global__ void exclusive_scan_kernel(int* predicate, int* scan_result, int size) {
-    // Un simple scan exclusif, pour une efficacité accrue, considérez un scan hiérarchique ou l'utilisation de bibliothèques existantes.
-    if (threadIdx.x > 0 && threadIdx.x < size) {
-        scan_result[threadIdx.x] = predicate[threadIdx.x - 1] + scan_result[threadIdx.x - 1];
-    } else {
-        scan_result[0] = 0;
+__global__ void exclusive_scan_kernel(int* buffer, int size) {
+    unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
+    extern __shared__ int s[];
+    s[threadIdx.x] = buffer[id];
+
+    if (id < size) {
+        for (int i = 1; i < blockDim.x; i *= 2) {
+            int x;
+            if (i <= threadIdx.x) {
+                x = s[threadIdx.x - i];
+            }
+            __syncthreads();
+            if (i <= threadIdx.x) {
+                s[threadIdx.x] += x;
+            }
+            __syncthreads();
+        }
+        buffer[id] = s[threadIdx.x];
+    }
+
+    // Intra-block scan is complete, now perform inter-block communication
+    __shared__ int lastValue;
+    if (threadIdx.x == blockDim.x - 1) {
+        lastValue = s[threadIdx.x];
+    }
+    __syncthreads();
+
+    if (id >= blockDim.x) {
+        buffer[id] += lastValue;
     }
 }
 
-__global__ void scatter_kernel(int* buffer, int* scan_result, int size, int garbage_val) {
+__global__ void scatter_kernel(int* buffer, int* scan_result, int* output, int size, int garbage_val) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < size) {
         if (buffer[i] != garbage_val) {
-            buffer[scan_result[i]] = buffer[i];
+            output[scan_result[i]] = buffer[i];
         }
     }
 }
@@ -28,16 +51,28 @@ __global__ void scatter_kernel(int* buffer, int* scan_result, int size, int garb
 // Fonction pour appeler les kernels
 void compact_image_gpu(int* d_buffer, int image_size) {
     constexpr int garbage_val = -27;
-    int *d_predicate, *d_scan_result;
+    int *d_predicate, *d_scan_result, *d_output;
     cudaMalloc(&d_predicate, image_size * sizeof(int));
     cudaMalloc(&d_scan_result, image_size * sizeof(int));
+    cudaMalloc(&d_output, image_size * sizeof(int));
+
+    std::vector<int> h_predicate;
+    h_predicate.resize(image_size);
 
     int blockSize = 256;
     int gridSize = (image_size + blockSize - 1) / blockSize;
 
     predicate_kernel<<<gridSize, blockSize>>>(d_buffer, d_predicate, image_size, garbage_val);
-    exclusive_scan_kernel<<<1, image_size>>>(d_predicate, d_scan_result, image_size);
-    scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_scan_result, image_size, garbage_val);
+    exclusive_scan_kernel<<<gridSize, blockSize, blockSize * sizeof(int)>>>(d_predicate, /*d_scan_result,*/ image_size);
+
+    //CPU
+    //cudaMemcpy(h_predicate.data(), d_predicate, image_size * sizeof(int), cudaMemcpyDeviceToHost);
+    //std::exclusive_scan(h_predicate.begin(), h_predicate.end(), h_predicate.begin(), 0);
+    //cudaMemcpy(d_predicate, h_predicate.data(), image_size * sizeof(int), cudaMemcpyHostToDevice);
+
+    scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_predicate, d_output, image_size, garbage_val);
+
+    cudaMemcpy(d_buffer, d_output, image_size * sizeof(int), cudaMemcpyDeviceToDevice);
 
     cudaFree(d_predicate);
     cudaFree(d_scan_result);
@@ -124,13 +159,31 @@ Image fix_image_gpu(Image image){
     cudaMalloc(&d_buffer, image.size() * sizeof(int));
     cudaMalloc(&d_histogram, 255*sizeof(int));
     cudaMalloc(&cdf_min, sizeof(int));
+
+    /*std::vector<int> predicate(image.size(), 0);
+
+    constexpr int garbage_val = -27;
+    for (int i = 0; i < image.size(); ++i)
+        if (image.buffer[i] != garbage_val)
+            predicate[i] = 1;
+
+    // Compute the exclusive sum of the predicate
+
+    std::exclusive_scan(predicate.begin(), predicate.end(), predicate.begin(), 0);
+
+    // Scatter to the corresponding addresses
+
+    for (std::size_t i = 0; i < predicate.size(); ++i)
+        if (image.buffer[i] != garbage_val)
+            image.buffer[predicate[i]] = image.buffer[i];*/
+
     cudaMemcpy(d_buffer, image.buffer, image.size() * sizeof(int), cudaMemcpyHostToDevice);
 
     compact_image_gpu(d_buffer, image.size());
     apply_map_to_pixels_gpu(d_buffer, image.size());
-    calculate_histogram_gpu(d_buffer, d_histogram, image.size());
+    /*calculate_histogram_gpu(d_buffer, d_histogram, image.size());
     findFirstNonZero(d_histogram, cdf_min, image.size());
-    equalize_histogram_gpu(d_buffer, d_histogram, image.size(), cdf_min);
+    equalize_histogram_gpu(d_buffer, d_histogram, image.size(), cdf_min);*/
 
     cudaMemcpy(image.buffer, d_buffer, image.size() * sizeof(int), cudaMemcpyDeviceToHost);
 
