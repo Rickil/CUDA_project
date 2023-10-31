@@ -1,7 +1,8 @@
 #include "image.hh"
 #include "pipeline.hh"
-//#include "fix_cpu.cuh"
+#include "fix_cpu.cuh"
 #include "fix_gpu.cuh"
+#include "fix_gpu_perfect.cuh"
 
 #include <vector>
 #include <iostream>
@@ -48,8 +49,9 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // There are still ways to speeds this process of course (wait for last class)
         Image img = pipeline.get_image(i);
 
-        images[i] = fix_image_gpu(img);
-        //fix_image_cpu(images[i]);
+        images[i] = fix_image_gpu_perfect(img);
+        /*images[i] = pipeline.get_image(i);
+        fix_image_cpu(images[i]);*/
     }
 
     std::cout << "Done with compute, starting stats" << std::endl;

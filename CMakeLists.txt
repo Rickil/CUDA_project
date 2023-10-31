@@ -13,7 +13,7 @@ enable_language(CUDA)
 
 find_package(OpenMP REQUIRED)
 
-include_directories(src)
+include_directories(cub src)
 
 add_compile_options(-W -Wall -Wextra -fconcepts)
 
@@ -30,7 +30,7 @@ set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
 set(CMAKE_CUDA_FLAGS "-Xcompiler -fopenmp --extended-lambda --generate-line-info --expt-relaxed-constexpr ${CMAKE_CUDA_FLAGS}")
 #set(CMAKE_CUDA_FLAGS "--ptxas-options=-v --generate-line-info")
 
-add_executable(main src/main.cu src/fix_cpu.cu src/fix_gpu.cu)
+add_executable(main src/main.cu src/fix_gpu_perfect.cu src/fix_gpu_perfect.cuh)
 
 target_link_libraries(main PUBLIC OpenMP::OpenMP_CXX)
 

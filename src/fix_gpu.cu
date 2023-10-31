@@ -8,35 +8,53 @@ __global__ void predicate_kernel(int* buffer, int* predicate, int size, int garb
 }
 
 __global__ void exclusive_scan_kernel(int* buffer, int size) {
-    unsigned int id = blockIdx.x * blockDim.x + threadIdx.x;
+    unsigned int id = threadIdx.x;
     extern __shared__ int s[];
-    s[threadIdx.x] = buffer[id];
+    s[id] = buffer[id];
 
+    // Perform scan within the block
     if (id < size) {
-        for (int i = 1; i < blockDim.x; i *= 2) {
+        for (int i = 1; i < size; i *= 2) {
             int x;
-            if (i <= threadIdx.x) {
-                x = s[threadIdx.x - i];
+            if (i <= id) {
+                x = s[id - i];
             }
             __syncthreads();
-            if (i <= threadIdx.x) {
-                s[threadIdx.x] += x;
+            if (i <= id) {
+                s[id] += x;
             }
             __syncthreads();
         }
-        buffer[id] = s[threadIdx.x];
+        buffer[id] = s[id];
+    }
+}
+
+void exclusive_scan_single_block(int* d_buffer, int size) {
+    int blockSize = 256;  // Adjust this based on your GPU's capabilities
+
+    // Allocate shared memory for the block
+    int sharedMemSize = sizeof(int) * blockSize;
+
+    // Call the exclusive_scan_kernel for a single block
+    exclusive_scan_kernel<<<1, blockSize, sharedMemSize>>>(d_buffer, size);
+}
+
+// Example of how to perform exclusive scan on 1000 blocks
+void exclusive_scan_1000_blocks(int* d_buffer, int size, int numBlocks) {
+    int blockSize = 256;  // Adjust this based on your GPU's capabilities
+
+    // Calculate the number of blocks required to scan the entire array
+    int gridDim = (size + blockSize - 1) / blockSize;
+
+    // Allocate shared memory for each block
+    int sharedMemSize = sizeof(int) * blockSize;
+
+    // Perform exclusive scan on each block
+    for (int blockId = 0; blockId < numBlocks; blockId++) {
+        exclusive_scan_kernel<<<1, blockSize, sharedMemSize>>>(d_buffer + blockId * blockSize, size);
     }
 
-    // Intra-block scan is complete, now perform inter-block communication
-    __shared__ int lastValue;
-    if (threadIdx.x == blockDim.x - 1) {
-        lastValue = s[threadIdx.x];
-    }
-    __syncthreads();
-
-    if (id >= blockDim.x) {
-        buffer[id] += lastValue;
-    }
+    // Wait for the GPU to finish
 }
 
 __global__ void scatter_kernel(int* buffer, int* scan_result, int* output, int size, int garbage_val) {
@@ -63,12 +81,17 @@ void compact_image_gpu(int* d_buffer, int image_size) {
     int gridSize = (image_size + blockSize - 1) / blockSize;
 
     predicate_kernel<<<gridSize, blockSize>>>(d_buffer, d_predicate, image_size, garbage_val);
-    exclusive_scan_kernel<<<gridSize, blockSize, blockSize * sizeof(int)>>>(d_predicate, /*d_scan_result,*/ image_size);
+
+    //GPU
+    /*int *blockSums;
+    cudaMalloc(&blockSums, blockSize * sizeof(int));*/
+
+    //exclusive_scan_1000_blocks(d_predicate, /*d_scan_result,*/ image_size, gridSize);
 
     //CPU
-    //cudaMemcpy(h_predicate.data(), d_predicate, image_size * sizeof(int), cudaMemcpyDeviceToHost);
-    //std::exclusive_scan(h_predicate.begin(), h_predicate.end(), h_predicate.begin(), 0);
-    //cudaMemcpy(d_predicate, h_predicate.data(), image_size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(h_predicate.data(), d_predicate, image_size * sizeof(int), cudaMemcpyDeviceToHost);
+    std::exclusive_scan(h_predicate.begin(), h_predicate.end(), h_predicate.begin(), 0);
+    cudaMemcpy(d_predicate, h_predicate.data(), image_size * sizeof(int), cudaMemcpyHostToDevice);
 
     scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_predicate, d_output, image_size, garbage_val);
 
@@ -76,6 +99,7 @@ void compact_image_gpu(int* d_buffer, int image_size) {
 
     cudaFree(d_predicate);
     cudaFree(d_scan_result);
+    cudaFree(d_output);
 }
 
 
@@ -92,6 +116,9 @@ __global__ void apply_map_kernel(int* buffer, int size) {
             buffer[i] -= 8;
         }
     }
+    /*if (buffer[i] < 0 || buffer[i] > 255) {
+        printf("%d\n", buffer[i]);
+    }*/
 }
 
 // Fonction pour appeler le kernel
@@ -104,6 +131,9 @@ void apply_map_to_pixels_gpu(int* d_buffer, int image_size) {
 __global__ void calculate_histogram_kernel(int* buffer, int* histogram, int size) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < size) {
+        /*if (buffer[i] < 0 || buffer[i] > 255) {
+            printf("%d", buffer[i]);
+        }*/
         atomicAdd(&(histogram[buffer[i]]), 1);
     }
 }
@@ -156,26 +186,11 @@ Image fix_image_gpu(Image image){
     int* d_buffer;
     int* d_histogram;
     int* cdf_min;
+    int histogram_size = 256;
     cudaMalloc(&d_buffer, image.size() * sizeof(int));
-    cudaMalloc(&d_histogram, 255*sizeof(int));
+    cudaMalloc(&d_histogram, histogram_size*sizeof(int));
     cudaMalloc(&cdf_min, sizeof(int));
 
-    /*std::vector<int> predicate(image.size(), 0);
-
-    constexpr int garbage_val = -27;
-    for (int i = 0; i < image.size(); ++i)
-        if (image.buffer[i] != garbage_val)
-            predicate[i] = 1;
-
-    // Compute the exclusive sum of the predicate
-
-    std::exclusive_scan(predicate.begin(), predicate.end(), predicate.begin(), 0);
-
-    // Scatter to the corresponding addresses
-
-    for (std::size_t i = 0; i < predicate.size(); ++i)
-        if (image.buffer[i] != garbage_val)
-            image.buffer[predicate[i]] = image.buffer[i];*/
 
     cudaMemcpy(d_buffer, image.buffer, image.size() * sizeof(int), cudaMemcpyHostToDevice);
 
