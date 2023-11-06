@@ -4,6 +4,6 @@
 #include <cub/cub.cuh>
 #include "image.hh"
 
-Image fix_image_gpu_perfect(Image image);
+void fix_image_gpu_perfect(Image& image);
 
 #endif
