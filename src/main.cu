@@ -37,6 +37,13 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     std::cout << "Done, starting compute" << std::endl;
 
+    std::cout << "START\n";
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
+
     //#pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
     {
@@ -48,16 +55,34 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You must get the image from the pipeline as they arrive and launch computations right away
         // There are still ways to speeds this process of course (wait for last class)
 
-        i=20;
+        //i=20;
         printf("image: %d\n", i);
         images[i] = pipeline.get_image(i);
         fix_image_gpu(images[i]);
         /*images[i] = pipeline.get_image(i);
         fix_image_cpu(images[i]);*/
-        break;
+        //break;
     }
 
     std::cout << "Done with compute, starting stats" << std::endl;
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+
+    std::cout << "Temps d'exécution de la fonction : " << milliseconds << " millisecondes" << std::endl;
+
+
+    /*double seconds = milliseconds / 1000.0;
+    double fps = images.size() / seconds;
+
+    std::cout << "FPS: " << fps << std::endl;*/
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
 
     // -- All images are now fixed : compute stats (total then sort)
 

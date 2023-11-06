@@ -83,7 +83,7 @@ void check_scan(int* d_predicate, int* d_scan_result, int size){
 
 }
 
-void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size){
+void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size, int compact_size){
     std::vector<int> h_buffer(size, 0);
     cudaMemcpy(h_buffer.data(), d_buffer, size*sizeof(int), cudaMemcpyDeviceToHost);
     std::vector<int> my_h_buffer(size, 0);
@@ -92,7 +92,7 @@ void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size){
     cudaMemcpy(h_predicate.data(), d_predicate, size*sizeof(int), cudaMemcpyDeviceToHost);
 
     constexpr int garbage_val = -27;
-    for (std::size_t i = 0; i < h_predicate.size(); ++i) {
+    for (std::size_t i = 0; i < compact_size; ++i) {
         if (h_buffer[i] != garbage_val) {
             h_buffer[h_predicate[i]] = h_buffer[i];
         }
@@ -100,7 +100,7 @@ void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size){
 
     bool same = true;
     int count = 0;
-    for (int i = 0; i < size; i++){
+    for (int i = 0; i < compact_size; i++){
         if (h_buffer[i] != my_h_buffer[i]){
             same = false;
             count++;
@@ -111,20 +111,32 @@ void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size){
     if (same)
         printf("scatter good !\n");
     else
-        printf("scatter bad !, %d are bad, %i\n", count, (count/size)*100);
+        printf("scatter bad !, %d are bad, %f\n", count, ((float)count/size)*100);
 }
 
-typedef struct blockStatus
+typedef struct TileStatus
 {
-    int flag;
+    int flags;
     int aggregate;
-    int prefix; //inclusive
-} blockStatus;
+    int inclusive_prefix;
+} TileStatus;
 
-// blockStatus statuses[gridSize];
+
+template <int BLOCKSIZE>
+__device__ static inline void warp_reduce_template(int* sdata, int tid)
+{
+    if constexpr (BLOCKSIZE >= 64) {sdata[tid] += sdata[tid + 32]; __syncwarp();}
+    if constexpr (BLOCKSIZE >= 32) {sdata[tid] += sdata[tid + 16]; __syncwarp();}
+    if constexpr (BLOCKSIZE >= 16) {sdata[tid] += sdata[tid + 8]; __syncwarp();}
+    if constexpr (BLOCKSIZE >= 8)  {sdata[tid] += sdata[tid + 4]; __syncwarp();}
+    if constexpr (BLOCKSIZE >= 4)  {sdata[tid] += sdata[tid + 2]; __syncwarp();}
+    if constexpr (BLOCKSIZE >= 2)  {sdata[tid] += sdata[tid + 1]; __syncwarp();}
+}
+
+// TileStatus statuses[gridSize];
 template <int blocksize>
 __global__ void decoupled_look_back_scan_kernel(int *out, int* predicate, int size,
-                                                  volatile blockStatus *statuses, int *id_)
+                                                  volatile TileStatus *statuses, int *id_)
 {
     extern __shared__ int blockId[]; // + exlcusif prefix + block id
     int tid = threadIdx.x;
@@ -135,7 +147,8 @@ __global__ void decoupled_look_back_scan_kernel(int *out, int* predicate, int si
     }
 
     __syncthreads();
-
+    //if (id >= size)
+    //    return;
     int id = tid + blockId[blocksize] * blockDim.x;
     if (id >= size)
     {
@@ -147,11 +160,43 @@ __global__ void decoupled_look_back_scan_kernel(int *out, int* predicate, int si
     blockId[tid] = inter;
     __syncthreads();
 
+    if constexpr (blocksize >= 1024)
+    {
+        if (tid < 512)
+        {blockId[tid] += blockId[tid + 512]; }
+        __syncthreads();
+    }
+    if constexpr (blocksize >= 512)
+    {
+        if (tid < 256)
+        {blockId[tid] += blockId[tid + 256];}
+        __syncthreads();
+    }
+    if constexpr (blocksize >= 256)
+    {
+        if (tid < 128)
+        {
+            blockId[tid] += blockId[tid + 128];
+        }
+        __syncthreads();
+    }
+
+    if constexpr (blocksize >= 128)
+    {
+        if (tid < 64){blockId[tid] += blockId[tid + 64]; }
+        __syncthreads();
+    }
+
+    if (tid < 32)
+    {
+        warp_reduce_template<blocksize>(blockId, tid);
+    }
+    __syncthreads();
 
     if (tid == 0)
     {
         statuses[blockId[blocksize]].aggregate =  blockId[0];
-        statuses[blockId[blocksize]].flag= STATUS_AGGREGATE_AVAILABLE;
+        statuses[blockId[blocksize]].flags= STATUS_AGGREGATE_AVAILABLE;
     }
 
     __syncthreads();
@@ -163,25 +208,27 @@ __global__ void decoupled_look_back_scan_kernel(int *out, int* predicate, int si
 
         if (tid == 0)
         {
-            statuses[blockId[blocksize]].prefix = statuses[blockId[blocksize]].aggregate;
-            statuses[blockId[blocksize]].flag= STATUS_PREFIX_SUM_AVAILABLE;
+            statuses[blockId[blocksize]].inclusive_prefix = statuses[blockId[blocksize]].aggregate;
+            statuses[blockId[blocksize]].flags= STATUS_PREFIX_SUM_AVAILABLE;
+            //printf("Block id =%i, block_agregate=%i\n", blockId[blocksize], statuses[blockId[blocksize]].aggregate);
+            //printf("Block id =%i, block_sum=%i\n", blockId[blocksize], blockId[blocksize + 1]);
         }
     }
     else // look-back
     {
         if (tid == 0)
         {
-            statuses[blockId[blocksize]].flag= STATUS_AGGREGATE_AVAILABLE;
+            statuses[blockId[blocksize]].flags= STATUS_AGGREGATE_AVAILABLE;
             int prev_block = blockId[blocksize] - 1;
-
+            //printf("Block id =%i, previous block=%i\n", blockId[blocksize], prev_block);
             while (prev_block >= 0) // go back
             {
-                while (statuses[prev_block].flag == STATUS_X) // block
+                while (statuses[prev_block].flags == STATUS_X) // block
                 {
                 };
-                if (statuses[prev_block].flag == STATUS_PREFIX_SUM_AVAILABLE)
+                if (statuses[prev_block].flags == STATUS_PREFIX_SUM_AVAILABLE)
                 {
-                    blockId[blocksize + 1] += statuses[prev_block].prefix;
+                    blockId[blocksize + 1] += statuses[prev_block].inclusive_prefix;
                     break;
                 }
                 // STATUS_AGGREGATE_AVAILABLE
@@ -189,13 +236,15 @@ __global__ void decoupled_look_back_scan_kernel(int *out, int* predicate, int si
             }
             // End == STATUS_PREFIX_SUM_AVAILABLE
             // Since block 0 is initialized, its ok
+            //printf("Block id =%i, block_sum=%i\n", blockId[blocksize], blockId[blocksize + 1]);
+            //printf("Block id =%i, block_agregate=%i\n", blockId[blocksize], statuses[blockId[blocksize]].aggregate);
         }
         __syncthreads();
 
-        statuses[blockId[blocksize]].prefix =
+        statuses[blockId[blocksize]].inclusive_prefix =
                 statuses[blockId[blocksize]].aggregate + blockId[blocksize + 1];
 
-        statuses[blockId[blocksize]].flag= STATUS_PREFIX_SUM_AVAILABLE;
+        statuses[blockId[blocksize]].flags= STATUS_PREFIX_SUM_AVAILABLE;
     }
     __syncthreads();
 
@@ -204,23 +253,24 @@ __global__ void decoupled_look_back_scan_kernel(int *out, int* predicate, int si
 
     __syncthreads();
 
-    for (int i=1; i<blockDim.x; i*=2){
-        int x1 = 0;
-        int x2 = 0;
-        if (i <= tid)
+    for (unsigned int stride = 1; stride < blockDim.x; stride *= 2)
+    {
+        int tmp_value = 0;
+        int tmp_value2 = 0;
+        if (tid >= stride)
         {
-            x1 = blockId[tid - i];
-            x2 = blockId[tid];
+            tmp_value = blockId[tid - stride];
+            tmp_value2 = blockId[tid];
         }
         __syncthreads();
 
-        if (i <= tid)
+        if (tid >= stride)
         {
-            blockId[tid] = x1+x2;
+            blockId[tid] = tmp_value + tmp_value2;
         }
         __syncthreads();
+
     }
-
     int prefix_sum = blockId[blocksize + 1];
     __syncthreads();
     //printf("prefix_sum=%i, block=%i\n", prefix_sum, blockId[blocksize]);
@@ -228,7 +278,6 @@ __global__ void decoupled_look_back_scan_kernel(int *out, int* predicate, int si
     {
         out[id + 1] = blockId[tid] + prefix_sum;
     }
-
 }
 
 void decoupled_look_back_scan(int* d_predicate, int *d_scan_result, int size){
@@ -239,29 +288,30 @@ void decoupled_look_back_scan(int* d_predicate, int *d_scan_result, int size){
     cudaMalloc(&lookBack_id, sizeof(int));
     cudaMemset(lookBack_id, 0, sizeof(int));
 
-    blockStatus *statuses = nullptr;
-    cudaMalloc(&statuses, gridSize * sizeof(blockStatus));
-    cudaMemset(statuses, 0, gridSize * sizeof(blockStatus));
+    TileStatus *statuses = nullptr;
+    cudaMalloc(&statuses, gridSize * sizeof(TileStatus));
+    cudaMemset(statuses, 0, gridSize * sizeof(TileStatus));
 
-    decoupled_look_back_scan_kernel<blockSize><<<gridSize, blockSize>>>(
+    decoupled_look_back_scan_kernel<blockSize><<<gridSize, blockSize, (blockSize + 2) * sizeof(int)>>>(
             d_scan_result, d_predicate, size, statuses, lookBack_id);
 }
 
 
-__global__ void scatter_kernel(int* buffer, int* predicate, int size, int garbage_val) {
+__global__ void scatter_kernel(int* buffer, int *output, int* predicate, int size, int garbage_val) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (i < size) {
         int tmp = buffer[i];
+        int pred_id = predicate[i];
         __syncthreads();
-        if (tmp != garbage_val) {
-            buffer[predicate[i]] = tmp;
+        if (tmp != -27) {
+            output[pred_id] = tmp;
         }
     }
 }
 
 // Fonction pour appeler les kernels
-void compact_image_gpu(int* d_buffer, int image_size) {
+void compact_image_gpu(int* d_buffer, int* d_output, int image_size, int compact_size) {
     constexpr int garbage_val = -27;
     int *d_predicate, *d_scan_result;
     cudaMalloc(&d_predicate, image_size*sizeof(int));
@@ -285,20 +335,11 @@ void compact_image_gpu(int* d_buffer, int image_size) {
     cudaMalloc(&d_predicate_copy, image_size*sizeof(int));
     cudaMemcpy(d_predicate_copy, d_predicate, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
 
-
-            //GPU
     decoupled_look_back_scan(d_predicate, d_scan_result, image_size);
     check_scan(d_predicate_copy, d_scan_result, image_size);
 
-    //CPU
-    /*std::vector<int> h_predicate;
-    h_predicate.resize(image_size);
-    cudaMemcpy(h_predicate.data(), d_predicate, image_size * sizeof(int), cudaMemcpyDeviceToHost);
-    std::exclusive_scan(h_predicate.begin(), h_predicate.end(), h_predicate.begin(), 0);
-    cudaMemcpy(d_predicate, h_predicate.data(), image_size * sizeof(int), cudaMemcpyHostToDevice);*/
-
-    scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_scan_result, image_size, garbage_val);
-    check_scatter(d_buffer, d_buffer_copy, d_predicate, image_size);
+    scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_output, d_scan_result, image_size, garbage_val);
+    check_scatter(d_output, d_buffer_copy, d_predicate, image_size, compact_size);
 
     cudaFree(d_predicate);
     cudaFree(d_scan_result);
@@ -379,12 +420,15 @@ void findFirstNonZero(int *d_histogram, int *cdf_min, int histogram_size){
 
 void fix_image_gpu(Image& image){
     const int image_size = image.size();
+    const int compact_size = image.width*image.height;
 
     int* d_buffer;
+    int* d_output;
     int* d_histogram;
     int* cdf_min;
     int histogram_size = 256;
     cudaMalloc(&d_buffer, image_size*sizeof(int));
+    cudaMalloc(&d_output, compact_size*sizeof(int));
     cudaMalloc(&d_histogram, histogram_size*sizeof(int));
     cudaMemset(d_histogram, 0, histogram_size*sizeof(int));
     cudaMalloc(&cdf_min, sizeof(int));
@@ -392,16 +436,27 @@ void fix_image_gpu(Image& image){
 
     cudaMemcpy(d_buffer, image.buffer, image_size*sizeof(int), cudaMemcpyHostToDevice);
 
-    compact_image_gpu(d_buffer, image_size);
-    apply_map_to_pixels_gpu(d_buffer, image_size);
+    compact_image_gpu(d_buffer, d_output, image_size, compact_size);
+    apply_map_to_pixels_gpu(d_output, compact_size);
 
     /*calculate_histogram_gpu(d_buffer, d_histogram, image.size());
     findFirstNonZero(d_histogram, cdf_min, histogram_size);
     equalize_histogram_gpu(d_buffer, d_histogram, image.size(), cdf_min);*/
 
-    cudaMemcpy(image.buffer, d_buffer, image.size() * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(image.buffer, d_output, image.width*image.height * sizeof(int), cudaMemcpyDeviceToHost);
+
+    //check image_buffer
+    int count = 0;
+    for (int i=0; i<image.size(); i++){
+        if (image.buffer[i] == -27){
+            count++;
+            //printf("value -27 at %d\n", i);
+        }
+    }
+    printf("%d values at -27\n", count);
 
     cudaFree(d_buffer);
+    cudaFree(d_output);
     cudaFree(d_histogram);
     cudaFree(cdf_min);
 
