@@ -37,7 +37,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     std::cout << "Done, starting compute" << std::endl;
 
-    #pragma omp parallel for
+    //#pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
     {
         // TODO : make it GPU compatible (aka faster)
@@ -47,11 +47,14 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // You *must not* copy all the images and only then do the computations
         // You must get the image from the pipeline as they arrive and launch computations right away
         // There are still ways to speeds this process of course (wait for last class)
-        Image img = pipeline.get_image(i);
 
-        images[i] = fix_image_gpu_perfect(img);
+        i=25;
+        printf("image: %d\n", i);
+        images[i] = pipeline.get_image(i);
+        fix_image_gpu(images[i]);
         /*images[i] = pipeline.get_image(i);
         fix_image_cpu(images[i]);*/
+        //break;
     }
 
     std::cout << "Done with compute, starting stats" << std::endl;

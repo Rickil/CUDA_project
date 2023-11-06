@@ -15,6 +15,7 @@ void fix_image_cpu(Image& to_fix)
     // Build predicate vector
 
     std::vector<int> predicate(to_fix.size(), 0);
+    std::cout << image_size << ", " << to_fix.size() << "\n";
 
     constexpr int garbage_val = -27;
     for (int i = 0; i < to_fix.size(); ++i)
@@ -27,9 +28,13 @@ void fix_image_cpu(Image& to_fix)
 
     // Scatter to the corresponding addresses
 
-    for (std::size_t i = 0; i < predicate.size(); ++i)
-        if (to_fix.buffer[i] != garbage_val)
+    for (std::size_t i = 0; i < predicate.size(); ++i) {
+        if (to_fix.buffer[i] != garbage_val) {
             to_fix.buffer[predicate[i]] = to_fix.buffer[i];
+            /*if (to_fix.buffer[predicate[i]] < 0)
+                printf("%d: %d\n", predicate[i]%4, to_fix.buffer[predicate[i]]);*/
+        }
+    }
 
 
     // #2 Apply map to fix pixels

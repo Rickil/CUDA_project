@@ -5,6 +5,6 @@
 #include <iostream>
 #include <numeric>
 
-Image fix_image_gpu(Image image);
+void fix_image_gpu(Image& image);
 
 #endif //PROJECT_STUDENT_FIX_GPU_CUH
