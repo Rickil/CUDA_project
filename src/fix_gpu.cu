@@ -282,298 +282,6 @@ __global__ void decoupled_look_back_scan_kernel(int *out, int* predicate, int si
     }
 }
 
-//####NEW
-
-// TileStatus statuses[gridSize];
-template <int blocksize>
-__global__ void decoupled_look_back_scan_exclusif(int *out, int* predicate, int size,
-                                                  volatile TileStatus *statuses, int *id_)
-{
-    extern __shared__ int blockId[]; // + exlcusif prefix + block id
-    int tid = threadIdx.x;
-    if (tid == 0)
-    {
-        blockId[blocksize + 1] = 0;
-        blockId[blocksize] = atomicAdd(id_, 1);
-    }
-
-    __syncthreads();
-    //if (id >= size)
-    //    return;
-    int id = tid + blockId[blocksize] * blockDim.x;
-    if (id >= size)
-    {
-        return;
-    }
-    __syncthreads();
-
-    int inter = predicate[id];
-    blockId[tid] = inter;
-    __syncthreads();
-
-    if constexpr (blocksize >= 1024)
-    {
-        if (tid < 512)
-        {blockId[tid] += blockId[tid + 512]; }
-        __syncthreads();
-    }
-    if constexpr (blocksize >= 512)
-    {
-        if (tid < 256)
-        {blockId[tid] += blockId[tid + 256];}
-        __syncthreads();
-    }
-    if constexpr (blocksize >= 256)
-    {
-        if (tid < 128)
-        {
-            blockId[tid] += blockId[tid + 128];
-        }
-        __syncthreads();
-    }
-
-    if constexpr (blocksize >= 128)
-    {
-        if (tid < 64){blockId[tid] += blockId[tid + 64]; }
-        __syncthreads();
-    }
-
-    if (tid < 32)
-    {
-        warp_reduce_template<blocksize>(blockId, tid);
-    }
-    __syncthreads();
-
-    if (tid == 0)
-    {
-        statuses[blockId[blocksize]].aggregate =  blockId[0];
-        statuses[blockId[blocksize]].flags= STATUS_AGGREGATE_AVAILABLE;
-    }
-
-    __syncthreads();
-
-    // Only need one thread by block here.
-    // Can use multiple to lookback N block at a time
-    if (blockId[blocksize] == 0)
-    {
-
-        if (tid == 0)
-        {
-            statuses[blockId[blocksize]].inclusive_prefix = statuses[blockId[blocksize]].aggregate;
-            statuses[blockId[blocksize]].flags= STATUS_PREFIX_SUM_AVAILABLE;
-            //printf("Block id =%i, block_agregate=%i\n", blockId[blocksize], statuses[blockId[blocksize]].aggregate);
-            //printf("Block id =%i, block_sum=%i\n", blockId[blocksize], blockId[blocksize + 1]);
-        }
-    }
-    else // look-back
-    {
-        if (tid == 0)
-        {
-            statuses[blockId[blocksize]].flags= STATUS_AGGREGATE_AVAILABLE;
-            int prev_block = blockId[blocksize] - 1;
-            //printf("Block id =%i, previous block=%i\n", blockId[blocksize], prev_block);
-            while (prev_block >= 0) // go back
-            {
-                while (statuses[prev_block].flags == STATUS_X) // block
-                {
-                };
-                if (statuses[prev_block].flags == STATUS_PREFIX_SUM_AVAILABLE)
-                {
-                    blockId[blocksize + 1] += statuses[prev_block].inclusive_prefix;
-                    break;
-                }
-                // STATUS_AGGREGATE_AVAILABLE
-                blockId[blocksize + 1] += statuses[prev_block--].aggregate;
-            }
-            // End == STATUS_PREFIX_SUM_AVAILABLE
-            // Since block 0 is initialized, its ok
-            //printf("Block id =%i, block_sum=%i\n", blockId[blocksize], blockId[blocksize + 1]);
-            //printf("Block id =%i, block_agregate=%i\n", blockId[blocksize], statuses[blockId[blocksize]].aggregate);
-        }
-        __syncthreads();
-
-        statuses[blockId[blocksize]].inclusive_prefix =
-                statuses[blockId[blocksize]].aggregate + blockId[blocksize + 1];
-
-        statuses[blockId[blocksize]].flags= STATUS_PREFIX_SUM_AVAILABLE;
-    }
-    __syncthreads();
-
-    int prefix = predicate[id];
-    blockId[tid] = prefix;
-
-    __syncthreads();
-
-    for (unsigned int stride = 1; stride < blockDim.x; stride *= 2)
-    {
-        int tmp_value = 0;
-        int tmp_value2 = 0;
-        if (tid >= stride)
-        {
-            tmp_value = blockId[tid - stride];
-            tmp_value2 = blockId[tid];
-        }
-        __syncthreads();
-
-        if (tid >= stride)
-        {
-            blockId[tid] = tmp_value + tmp_value2;
-        }
-        __syncthreads();
-
-    }
-    int prefix_sum = blockId[blocksize + 1];
-    __syncthreads();
-    //printf("prefix_sum=%i, block=%i\n", prefix_sum, blockId[blocksize]);
-    if (id + 1 < size)
-    {
-        out[id + 1] = blockId[tid] + prefix_sum;
-    }
-}
-
-// TileStatus statuses[gridSize];
-template <int blocksize>
-__global__ void decoupled_look_back_scan_inclusif(int *out, int* predicate, int size,
-                                                  volatile TileStatus *statuses, int *id_)
-{
-    extern __shared__ int blockId[]; // + exlcusif prefix + block id
-    int tid = threadIdx.x;
-    if (tid == 0)
-    {
-        blockId[blocksize + 1] = 0;
-        blockId[blocksize] = atomicAdd(id_, 1);
-    }
-    __syncthreads();
-    int id = tid + blockId[blocksize] * blockDim.x;
-    if (id >= size)
-    {
-        return;
-    }
-    __syncthreads();
-    //if (id >= size)
-    //    return;
-    blockId[tid] = predicate[id];
-    __syncthreads();
-
-    if constexpr (blocksize >= 1024)
-    {
-        if (tid < 512)
-        {blockId[tid] += blockId[tid + 512]; }
-        __syncthreads();
-    }
-    if constexpr (blocksize >= 512)
-    {
-        if (tid < 256)
-        {blockId[tid] += blockId[tid + 256];}
-        __syncthreads();
-    }
-    if constexpr (blocksize >= 256)
-    {
-        if (tid < 128)
-        {
-            blockId[tid] += blockId[tid + 128];
-        }
-        __syncthreads();
-    }
-
-    if constexpr (blocksize >= 128)
-    {
-        if (tid < 64){blockId[tid] += blockId[tid + 64]; }
-        __syncthreads();
-    }
-
-    if (tid < 32)
-    {
-        warp_reduce_template<blocksize>(blockId, tid);
-    }
-    __syncthreads();
-
-    if (tid == 0)
-    {
-        statuses[blockId[blocksize]].aggregate =  blockId[0];
-        statuses[blockId[blocksize]].flags= STATUS_AGGREGATE_AVAILABLE;
-    }
-
-    __syncthreads();
-
-    // Only need one thread by block here.
-    // Can use multiple to lookback N block at a time
-    if (blockId[blocksize] == 0)
-    {
-
-        if (tid == 0)
-        {
-            statuses[blockId[blocksize]].inclusive_prefix = statuses[blockId[blocksize]].aggregate;
-            statuses[blockId[blocksize]].flags= STATUS_PREFIX_SUM_AVAILABLE;
-            //printf("Block id =%i, block_agregate=%i\n", blockId[blocksize], statuses[blockId[blocksize]].aggregate);
-            //printf("Block id =%i, block_sum=%i\n", blockId[blocksize], blockId[blocksize + 1]);
-        }
-    }
-    else // look-back
-    {
-        if (tid == 0)
-        {
-            statuses[blockId[blocksize]].flags= STATUS_AGGREGATE_AVAILABLE;
-            int prev_block = blockId[blocksize] - 1;
-            //printf("Block id =%i, previous block=%i\n", blockId[blocksize], prev_block);
-            while (prev_block >= 0) // go back
-            {
-                while (statuses[prev_block].flags == STATUS_X) // block
-                {
-                };
-                if (statuses[prev_block].flags == STATUS_PREFIX_SUM_AVAILABLE)
-                {
-                    blockId[blocksize + 1] += statuses[prev_block].inclusive_prefix;
-                    break;
-                }
-                // STATUS_AGGREGATE_AVAILABLE
-                blockId[blocksize + 1] += statuses[prev_block--].aggregate;
-            }
-            // End == STATUS_PREFIX_SUM_AVAILABLE
-            // Since block 0 is initialized, its ok
-            //printf("Block id =%i, block_sum=%i\n", blockId[blocksize], blockId[blocksize + 1]);
-            //printf("Block id =%i, block_agregate=%i\n", blockId[blocksize], statuses[blockId[blocksize]].aggregate);
-        }
-        __syncthreads();
-
-        statuses[blockId[blocksize]].inclusive_prefix =
-                statuses[blockId[blocksize]].aggregate + blockId[blocksize + 1];
-
-        statuses[blockId[blocksize]].flags= STATUS_PREFIX_SUM_AVAILABLE;
-    }
-    __syncthreads();
-
-    int prefix = predicate[id];
-    blockId[tid] = prefix;
-
-    __syncthreads();
-
-    for (unsigned int stride = 1; stride < blockDim.x; stride *= 2)
-    {
-        int tmp_value = 0;
-        int tmp_value2 = 0;
-        if (tid >= stride)
-        {
-            tmp_value = blockId[tid - stride];
-            tmp_value2 = blockId[tid];
-        }
-        __syncthreads();
-
-        if (tid >= stride)
-        {
-            blockId[tid] = tmp_value + tmp_value2;
-        }
-        __syncthreads();
-
-    }
-    int prefix_sum = blockId[blocksize + 1];
-    __syncthreads();
-    //printf("prefix_sum=%i, block=%i\n", prefix_sum, blockId[blocksize]);
-    out[id] = blockId[tid] + prefix_sum;
-}
-
-//#####ENDNEW
-
 void decoupled_look_back_scan(int* d_predicate, int *d_scan_result, int size){
     const int blockSize = 256;
     int gridSize = (size + blockSize - 1) / blockSize;
@@ -688,15 +396,43 @@ void apply_map_to_pixels_gpu(int* d_buffer, int image_size) {
 
 __global__ void calculate_histogram_kernel(int* buffer, int* histogram, int size) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < size) {
-        /*if (buffer[i] < 0 || buffer[i] > 255) {
-            printf("%d", buffer[i]);
-        }*/
-        int index = buffer[i];
-        atomicAdd(&histogram[index], 1);
-        //histogram[index] += 1;
+    if (i >= size) {
+        return;
     }
+
+    int index = buffer[i];
     __syncthreads();
+
+    atomicAdd(&histogram[index], 1);
+
+    __syncthreads();
+}
+
+void check_histogram(int* d_histogram, int* d_buffer, int histogram_size, int image_size){
+    std::vector<int> h_histogram(histogram_size, 0);
+    cudaMemcpy(h_histogram.data(), d_histogram, histogram_size*sizeof(int), cudaMemcpyDeviceToHost);
+    std::vector<int> h_buffer(image_size, 0);
+    cudaMemcpy(h_buffer.data(), d_buffer, image_size*sizeof(int), cudaMemcpyDeviceToHost);
+
+    std::array<int, 256> histo;
+    histo.fill(0);
+    for (int i = 0; i < image_size; ++i)
+        ++histo[h_buffer[i]];
+
+    bool same = true;
+    int count = 0;
+    for (int i = 0; i < histogram_size; i++){
+        if (histo[i] != h_histogram[i]){
+            same = false;
+            count++;
+            //printf("index: %d, cpu: %d, gpu: %d\n", i, h_buffer[i], my_h_buffer[i]);
+        }
+    }
+
+    if (same)
+        printf("calculate histogram good !\n");
+    else
+        printf("calculate histogram !, %d are bad, %f\n", count, ((float)count/histogram_size)*100);
 }
 
 __global__ void equalize_histogram_kernel(int* buffer, int* histogram, int size, int* cdf_min) {
@@ -712,6 +448,29 @@ void calculate_histogram_gpu(int* d_buffer, int* d_histogram, int image_size) {
     int blockSize = 256;
     int gridSize = (image_size + blockSize - 1) / blockSize;
     calculate_histogram_kernel<<<gridSize, blockSize>>>(d_buffer, d_histogram, image_size);
+}
+
+__global__ void inclusive_scan_kernel(int* buffer, int size) {
+    unsigned int id = threadIdx.x;
+    extern __shared__ int s[];
+    s[id] = buffer[id];
+
+    if (id < size) {
+        for (int i = 1; i < size; i *= 2) {
+            int x;
+            if (i <= id) {
+                x = s[id - i];
+                __syncthreads();
+                s[id] += x;
+                __syncthreads();
+            }
+        }
+    }
+    buffer[id] = s[id];
+}
+
+void inclusive_scan(int* d_buffer, int size){
+    inclusive_scan_kernel<<<1, size, size*sizeof(int)>>>(d_buffer, size);
 }
 
 void equalize_histogram_gpu(int* d_buffer, int* d_histogram, int image_size, int* cdf_min) {
@@ -756,9 +515,14 @@ void fix_image_gpu(Image& image){
     compact_image_gpu(d_buffer, d_output, image_size, compact_size);
     apply_map_to_pixels_gpu(d_output, compact_size);
 
-    /*calculate_histogram_gpu(d_output, d_histogram, compact_size);
+    calculate_histogram_gpu(d_output, d_histogram, compact_size);
+    check_histogram(d_histogram, d_output, histogram_size, compact_size);
+
+    inclusive_scan(d_histogram, histogram_size);
+
     findFirstNonZero(d_histogram, cdf_min, histogram_size);
-    equalize_histogram_gpu(d_output, d_histogram, compact_size, cdf_min);*/
+
+    equalize_histogram_gpu(d_output, d_histogram, compact_size, cdf_min);
 
     cudaMemcpy(image.buffer, d_output, image.width*image.height * sizeof(int), cudaMemcpyDeviceToHost);
 
