@@ -339,7 +339,7 @@ void compact_image_gpu(int* d_buffer, int* d_output, int image_size, int compact
     check_scan(d_predicate_copy, d_scan_result, image_size);
 
     scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_output, d_scan_result, image_size, garbage_val);
-    check_scatter(d_output, d_buffer_copy, d_predicate, image_size, compact_size);
+    //check_scatter(d_output, d_buffer_copy, d_predicate, image_size, compact_size);
 
     cudaFree(d_predicate);
     cudaFree(d_scan_result);
@@ -432,6 +432,7 @@ void fix_image_gpu(Image& image){
     cudaMalloc(&d_histogram, histogram_size*sizeof(int));
     cudaMemset(d_histogram, 0, histogram_size*sizeof(int));
     cudaMalloc(&cdf_min, sizeof(int));
+    cudaMemset(cdf_min, 255, sizeof(int));
 
 
     cudaMemcpy(d_buffer, image.buffer, image_size*sizeof(int), cudaMemcpyHostToDevice);
@@ -439,9 +440,9 @@ void fix_image_gpu(Image& image){
     compact_image_gpu(d_buffer, d_output, image_size, compact_size);
     apply_map_to_pixels_gpu(d_output, compact_size);
 
-    /*calculate_histogram_gpu(d_buffer, d_histogram, image.size());
+    calculate_histogram_gpu(d_output, d_histogram, compact_size);
     findFirstNonZero(d_histogram, cdf_min, histogram_size);
-    equalize_histogram_gpu(d_buffer, d_histogram, image.size(), cdf_min);*/
+    equalize_histogram_gpu(d_output, d_histogram, compact_size, cdf_min);
 
     cudaMemcpy(image.buffer, d_output, image.width*image.height * sizeof(int), cudaMemcpyDeviceToHost);
 
