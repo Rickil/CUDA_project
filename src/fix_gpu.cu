@@ -454,6 +454,7 @@ __global__ void inclusive_scan_kernel(int* buffer, int size) {
     unsigned int id = threadIdx.x;
     extern __shared__ int s[];
     s[id] = buffer[id];
+    __syncthreads();
 
     if (id < size) {
         for (int i = 1; i < size; i *= 2) {
