@@ -74,7 +74,8 @@ void check_scan(int* d_predicate, int* d_scan_result, int size){
         if (h_predicate[i] != h_scan_result[i]){
             same = false;
             count++;
-            //printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
+            if (i<10)
+                printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
         }
     }
 
@@ -298,6 +299,116 @@ void decoupled_look_back_scan(int* d_predicate, int *d_scan_result, int size){
             d_scan_result, d_predicate, size, statuses, lookBack_id);
 }
 
+__global__ void scan_kernel(int* buffer, int size) {
+    unsigned int id = threadIdx.x;
+    extern __shared__ int s[];
+    s[id] = buffer[id];
+    __syncthreads();
+
+    if (id >= size)
+        return;
+
+    for (int i = 1; i < size; i *= 2) {
+        int x;
+        if (i <= id) {
+            x = s[id - i];
+        }
+        __syncthreads();
+        if (i <= id) {
+            s[id] += x;
+        }
+        __syncthreads();
+
+    }
+    buffer[id] = s[id];
+    printf("index %d, value %d\n", id, buffer[id]);
+}
+
+// Step 1: Store Block Sum to Auxiliary Array
+__global__ void storeBlockSum(int* buffer, int* blockSums, int size, int blockSize) {
+    unsigned int id = threadIdx.x + blockIdx.x * blockDim.x;
+    unsigned int tid = threadIdx.x;
+    extern __shared__ int s[];
+
+    if (id >= size)
+        return;
+
+    s[tid] = (tid > 0) ? buffer[id - 1] : 0;  // Initialize the first element to 0 for inclusive scan
+    __syncthreads();
+
+    for (int i = 1; i < blockSize; i *= 2) {
+        int x;
+        if (i <= tid) {
+            x = s[tid - i];
+        }
+            __syncthreads();
+        if (i<=tid) {
+            s[tid] += x;
+        }
+            __syncthreads();
+    }
+
+    atomicAdd(&blockSums[blockIdx.x], buffer[id]);
+    __syncthreads();
+
+    buffer[id] = s[tid];
+    __syncthreads();
+
+    /*if (tid == blockSize - 1 || (id == size-1 && tid != blockSize - 1)) {
+        printf("block %d, sum: %d\n", blockIdx.x, s[tid]);
+        // Store the block sum in the blockSums array
+        blockSums[blockIdx.x] = s[tid];
+    }*/
+}
+
+// Step 2: Scan Block Sums (recursively if needed)
+void scanBlockSums(int* blockSums, int numBlocks, int blockSize) {
+    if (numBlocks <= 1) {
+        // If there's only one block sum, no need to scan it further
+        return;
+    }
+
+    if (numBlocks <= blockSize) {
+        // Launch scan_kernel for blockSums
+        scan_kernel<<<1, numBlocks, numBlocks * sizeof(int)>>>(blockSums, numBlocks);
+    }else {
+        // Recursively scan blockSums if necessary
+        scanBlockSums(blockSums, (numBlocks + blockSize - 1) / blockSize, blockSize);
+    }
+}
+
+// Step 3: Add Scanned Block Sum i to All Values of Scanned Block i + 1
+__global__ void addScannedBlockSum(int* buffer, int* blockSums, int size) {
+    unsigned int id = threadIdx.x + blockIdx.x * blockDim.x;
+    if (id >= size)
+        return ;
+    if (blockIdx.x > 0) {
+        // Add the scanned block sum of the previous block
+        buffer[id] += blockSums[blockIdx.x - 1];
+    }
+}
+
+void scan(int *d_buffer, int size){
+    int blockSize = 1024;  // Set your desired block size
+    int numBlocks = (size + blockSize - 1) / blockSize;
+
+    int* d_blockSums;
+    cudaMalloc(&d_blockSums, numBlocks*sizeof(int));
+    cudaMemset(d_blockSums, 0, numBlocks*sizeof(int));
+
+
+    // Step 1: Store Block Sum to Auxiliary Array
+    storeBlockSum<<<numBlocks, blockSize, blockSize * sizeof(int)>>>(d_buffer, d_blockSums, size, blockSize);
+
+    // Step 2: Scan Block Sums (recursively if needed)
+    scanBlockSums(d_blockSums, numBlocks, blockSize);
+
+    // Step 3: Add Scanned Block Sum i to All Values of Scanned Block i + 1
+    addScannedBlockSum<<<numBlocks, blockSize>>>(d_buffer, d_blockSums, size);
+
+    cudaFree(d_blockSums);
+}
+
 
 __global__ void scatter_kernel(int *buffer, int *exclusive_scan,
                                int *out_buffer, int size) {
@@ -357,7 +468,9 @@ void compact_image_gpu(int* d_buffer, int* d_output, int image_size, int compact
     cudaMalloc(&d_predicate_copy, image_size*sizeof(int));
     cudaMemcpy(d_predicate_copy, d_predicate, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
 
-    decoupled_look_back_scan(d_predicate, d_scan_result, image_size);
+    //decoupled_look_back_scan(d_predicate, d_scan_result, image_size);
+    scan(d_predicate, image_size);
+    cudaMemcpy(d_scan_result, d_predicate, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
     check_scan(d_predicate_copy, d_scan_result, image_size);
 
     cudaMemcpy(d_output, d_buffer, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
