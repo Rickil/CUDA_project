@@ -44,7 +44,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     cudaEventRecord(start);
 
-    //#pragma omp parallel for
+    #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
     {
         // TODO : make it GPU compatible (aka faster)

@@ -149,11 +149,9 @@ __global__ void scatter_kernel(int *buffer, int *exclusive_scan,
 // Fonction pour appeler les kernels
 void compact_image_gpu(int* d_buffer, int* d_output, int image_size, int compact_size) {
     constexpr int garbage_val = -27;
-    int *d_predicate, *d_scan_result;
+    int *d_predicate;
     cudaMalloc(&d_predicate, image_size*sizeof(int));
     cudaMemset(d_predicate, 0, image_size*sizeof(int));
-    cudaMalloc(&d_scan_result, image_size*sizeof(int));
-    cudaMemset(d_scan_result, 0, image_size*sizeof(int));
 
 
     int blockSize = 256;
@@ -171,17 +169,14 @@ void compact_image_gpu(int* d_buffer, int* d_output, int image_size, int compact
     cudaMalloc(&d_predicate_copy, image_size*sizeof(int));
     cudaMemcpy(d_predicate_copy, d_predicate, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
 
-    //decoupled_look_back_scan(d_predicate, d_scan_result, image_size);
     exclusive_scan(d_predicate, image_size);
-    cudaMemcpy(d_scan_result, d_predicate, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
-    check_scan(d_predicate_copy, d_scan_result, image_size);
+    check_scan(d_predicate_copy, d_predicate, image_size);
 
     cudaMemcpy(d_output, d_buffer, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
-    scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_scan_result, d_output, image_size);
-    check_scatter(d_output, d_buffer_copy, d_scan_result, image_size, compact_size);
+    scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_predicate, d_output, image_size);
+    check_scatter(d_output, d_buffer_copy, d_predicate, image_size, compact_size);
 
     cudaFree(d_predicate);
-    cudaFree(d_scan_result);
 }
 
 
@@ -277,10 +272,12 @@ __global__ void inclusive_scan_kernel(int* buffer, int size) {
             int x;
             if (i <= id) {
                 x = s[id - i];
-                __syncthreads();
-                s[id] += x;
-                __syncthreads();
             }
+            __syncthreads();
+            if(i<=id){
+                s[id] += x;
+            }
+            __syncthreads();
         }
     }
     buffer[id] = s[id];
