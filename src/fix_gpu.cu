@@ -1,15 +1,8 @@
 #include "fix_gpu.cuh"
 #include "gpu_scan.cuh"
+#include "decoupled_lookback.cuh"
 
 __global__ void predicate_kernel(int* buffer, int* out, int size) {
-    /*int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < size-1 && i > 0) {
-        if (buffer[i] != garbage_val)
-            predicate[i] = 1;
-        else
-            predicate[i] = 0;
-    }*/
-
     int id = threadIdx.x + blockIdx.x * blockDim.x;
     if (id >= size)
         return;
@@ -68,11 +61,13 @@ void check_scan(int* d_predicate, int* d_scan_result, int size){
     bool same = true;
     int count = 0;
     for (int i = 0; i < size; i++){
+        if ( i > 2045 && i<2051)
+            printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
         if (h_predicate[i] != h_scan_result[i]){
             same = false;
             count++;
-            if (i<10)
-                printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
+            //if (i<10)
+                //printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
         }
     }
 
@@ -116,18 +111,6 @@ void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size, 
 
 __global__ void scatter_kernel(int *buffer, int *exclusive_scan,
                                int *out_buffer, int size) {
-    /*int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (i >= size) {
-        return;
-    }
-
-    int tmp = buffer[i];
-    int pred_id = predicate[i];
-    __syncthreads();
-    if (tmp != garbage_val) {
-        output[pred_id] = tmp;
-    }*/
 
     int id = threadIdx.x + blockIdx.x * blockDim.x;
     if (id >= size)
@@ -159,23 +142,24 @@ void compact_image_gpu(int* d_buffer, int* d_output, int image_size, int compact
     int gridSize = (image_size + blockSize - 1) / blockSize;
 
     //copy the predicate for further tests
-    /*int *d_buffer_copy;
+    int *d_buffer_copy;
     cudaMalloc(&d_buffer_copy, image_size*sizeof(int));
-    cudaMemcpy(d_buffer_copy, d_buffer, image_size*sizeof(int), cudaMemcpyDeviceToDevice);*/
+    cudaMemcpy(d_buffer_copy, d_buffer, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
 
     predicate_kernel<<<gridSize, blockSize>>>(d_buffer, d_predicate, image_size);
-    //check_predicate(d_buffer_copy, d_predicate, image_size);
+    check_predicate(d_buffer_copy, d_predicate, image_size);
 
-    /*int *d_predicate_copy;
+    int *d_predicate_copy;
     cudaMalloc(&d_predicate_copy, image_size*sizeof(int));
-    cudaMemcpy(d_predicate_copy, d_predicate, image_size*sizeof(int), cudaMemcpyDeviceToDevice);*/
+    cudaMemcpy(d_predicate_copy, d_predicate, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
 
-    exclusive_scan(d_predicate, image_size);
-    //check_scan(d_predicate_copy, d_predicate, image_size);
+    //exclusive_scan(d_predicate, image_size);
+    decoupled_lookback(d_predicate, image_size);
+    check_scan(d_predicate_copy, d_predicate, image_size);
 
     cudaMemcpy(d_output, d_buffer, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
     scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_predicate, d_output, image_size);
-    //check_scatter(d_output, d_buffer_copy, d_predicate, image_size, compact_size);
+    check_scatter(d_output, d_buffer_copy, d_predicate, image_size, compact_size);
 
     cudaFree(d_predicate);
 }
@@ -330,26 +314,26 @@ void fix_image_gpu(Image& image){
     compact_image_gpu(d_buffer, d_output, image_size, compact_size);
     apply_map_to_pixels_gpu(d_output, compact_size);
 
-    calculate_histogram_gpu(d_output, d_histogram, compact_size);
+    /*calculate_histogram_gpu(d_output, d_histogram, compact_size);
     //check_histogram(d_histogram, d_output, histogram_size, compact_size);
 
     inclusive_scan(d_histogram, histogram_size);
 
     findFirstNonZero(d_histogram, cdf_min, histogram_size);
 
-    equalize_histogram_gpu(d_output, d_histogram, compact_size, cdf_min);
+    equalize_histogram_gpu(d_output, d_histogram, compact_size, cdf_min);*/
 
     cudaMemcpy(image.buffer, d_output, image.width*image.height * sizeof(int), cudaMemcpyDeviceToHost);
 
     //check image_buffer
-    /*int count = 0;
+    int count = 0;
     for (int i=0; i<compact_size; i++){
         if (image.buffer[i] == -27){
             count++;
             //printf("value -27 at %d\n", i);
         }
     }
-    printf("%d values at -27\n", count);*/
+    printf("%d values at -27\n", count);
 
     cudaFree(d_buffer);
     cudaFree(d_output);
