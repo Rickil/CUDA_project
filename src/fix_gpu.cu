@@ -61,12 +61,17 @@ void check_scan(int* d_predicate, int* d_scan_result, int size){
     bool same = true;
     int count = 0;
     for (int i = 0; i < size; i++){
-        if ( i > 2045 && i<2051)
+        /*int block = 229;
+        int blockSize = 1024;
+        if ( i >= (block*blockSize)-3 && i<=(block*blockSize)+3) {
+            if (i == block * blockSize)
+                printf("### new block (%d) ###\n", block);
             printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
+        }*/
         if (h_predicate[i] != h_scan_result[i]){
             same = false;
             count++;
-            //if (i<10)
+            //if (count<10)
                 //printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
         }
     }
