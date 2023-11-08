@@ -15,7 +15,7 @@ void fix_image_cpu(Image& to_fix)
     // Build predicate vector
 
     std::vector<int> predicate(to_fix.size(), 0);
-    std::cout << image_size << ", " << to_fix.size() << "\n";
+    //std::cout << image_size << ", " << to_fix.size() << "\n";
 
     constexpr int garbage_val = -27;
     for (int i = 0; i < to_fix.size(); ++i)

@@ -38,41 +38,49 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
     std::cout << "Done, starting compute" << std::endl;
 
     std::cout << "START\n";
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+    cudaEvent_t gpu_start, gpu_stop;
+    cudaEventCreate(&gpu_start);
+    cudaEventCreate(&gpu_stop);
 
-    cudaEventRecord(start);
+    cudaEventRecord(gpu_start);
+
+    // CPU timer
+    clock_t cpu_start, cpu_end;
+    cpu_start = clock();
 
     #pragma omp parallel for
     for (int i = 0; i < nb_images; ++i)
     {
-        // TODO : make it GPU compatible (aka faster)
+        // TODO: Make it GPU compatible (aka faster)
         // You will need to copy images one by one on the GPU
         // You can store the images the way you want on the GPU
-        // But you should treat the pipeline as a pipeline :
+        // But you should treat the pipeline as a pipeline:
         // You *must not* copy all the images and only then do the computations
         // You must get the image from the pipeline as they arrive and launch computations right away
-        // There are still ways to speeds this process of course (wait for last class)
+        // There are still ways to speed up this process, of course (wait for the last class)
 
-        //i=20;
-        printf("image: %d\n", i);
+        // i = 20;
+        // printf("image: %d\n", i);
         images[i] = pipeline.get_image(i);
         fix_image_gpu(images[i]);
         /*images[i] = pipeline.get_image(i);
         fix_image_cpu(images[i]);*/
-        //break;
+        // break;
     }
 
+    cudaEventRecord(gpu_stop);
+    cudaEventSynchronize(gpu_stop);
+
+    float gpu_milliseconds = 0;
+    cudaEventElapsedTime(&gpu_milliseconds, gpu_start, gpu_stop);
+
+    cpu_end = clock();
+    float cpu_milliseconds = 1000.0f * (cpu_end - cpu_start) / CLOCKS_PER_SEC;
+
     std::cout << "Done with compute, starting stats" << std::endl;
-
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-
-    std::cout << "Temps d'exécution de la fonction : " << milliseconds << " millisecondes" << std::endl;
+    std::cout << "GPU Time: " << gpu_milliseconds << " milliseconds" << std::endl;
+    std::cout << "CPU Time: " << cpu_milliseconds << " milliseconds" << std::endl;
+    std::cout << "GPU vs CPU Time: " << gpu_milliseconds << " ms (GPU) vs " << cpu_milliseconds << " ms (CPU)" << std::endl;
 
 
     /*double seconds = milliseconds / 1000.0;
@@ -80,8 +88,8 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     std::cout << "FPS: " << fps << std::endl;*/
 
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
+    cudaEventDestroy(gpu_start);
+    cudaEventDestroy(gpu_stop);
 
 
     // -- All images are now fixed : compute stats (total then sort)
