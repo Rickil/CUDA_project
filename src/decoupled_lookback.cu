@@ -23,7 +23,7 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
     //get the id with atomicAdd
     if (tid == 0) {
         s[blockSize] = atomicAdd(global_counter, 1);
-        s[blockSize+1] = 0;
+        s[0] = 0;
     }
 
     __syncthreads();
@@ -53,6 +53,7 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
 
         //step 3 look back
         int prevBlock = blockId - 1;
+        unsigned int prefix_sum_accumulation = 0;
 
         while (prevBlock >= 0) {
 
@@ -62,12 +63,12 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
             };
 
             if (blockStatuses[prevBlock].status == STATUS_A) {
-               s[blockSize+1] += blockStatuses[prevBlock].aggregate;
+                prefix_sum_accumulation += blockStatuses[prevBlock].aggregate;
                 /*if (blockId==2)
                     printf("block %d found block %d in the A state, prefix_sum is now %d\n", blockId, prevBlock, blockStatuses[blockId].prefix_sum);*/
 
             } else if (blockStatuses[prevBlock].status == STATUS_P) {
-                blockStatuses[blockId].prefix_sum = blockStatuses[prevBlock].prefix_sum + blockStatuses[prevBlock].aggregate + s[blockSize+1];
+                blockStatuses[blockId].prefix_sum = blockStatuses[prevBlock].prefix_sum + blockStatuses[prevBlock].aggregate + prefix_sum_accumulation;
                 blockStatuses[blockId].status = STATUS_P;
                 /*if (blockId==2)
                     printf("block %d found block %d in the P state, prefix_sum is now %d\n", blockId, prevBlock, blockStatuses[blockId].prefix_sum);*/
@@ -94,6 +95,7 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
         __syncthreads();
 
     }
+
     buffer[id] = s[tid] + blockStatuses[blockId].prefix_sum;
 }
 
@@ -113,7 +115,7 @@ void decoupled_lookback(int* buffer, int size){
     cudaMemset(blockStatuses, 0, nbBlocks*sizeof(BlockStatus));
 
     //launch kernel
-    decoupled_lookback_kernel<<<nbBlocks, blockSize, (blockSize + 2)*sizeof(int)>>>(buffer, blockStatuses, global_counter, size);
+    decoupled_lookback_kernel<<<nbBlocks, blockSize, (blockSize + 1)*sizeof(int)>>>(buffer, blockStatuses, global_counter, size);
     cudaCheckError();
 
 }

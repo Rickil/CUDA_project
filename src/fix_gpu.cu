@@ -61,7 +61,7 @@ void check_scan(int* d_predicate, int* d_scan_result, int size){
     bool same = true;
     int count = 0;
     for (int i = 0; i < size; i++){
-        /*int block = 229;
+        /*int block = 1000;
         int blockSize = 1024;
         if ( i >= (block*blockSize)-3 && i<=(block*blockSize)+3) {
             if (i == block * blockSize)
@@ -319,14 +319,14 @@ void fix_image_gpu(Image& image){
     compact_image_gpu(d_buffer, d_output, image_size, compact_size);
     apply_map_to_pixels_gpu(d_output, compact_size);
 
-    /*calculate_histogram_gpu(d_output, d_histogram, compact_size);
+    calculate_histogram_gpu(d_output, d_histogram, compact_size);
     //check_histogram(d_histogram, d_output, histogram_size, compact_size);
 
     inclusive_scan(d_histogram, histogram_size);
 
     findFirstNonZero(d_histogram, cdf_min, histogram_size);
 
-    equalize_histogram_gpu(d_output, d_histogram, compact_size, cdf_min);*/
+    equalize_histogram_gpu(d_output, d_histogram, compact_size, cdf_min);
 
     cudaMemcpy(image.buffer, d_output, image.width*image.height * sizeof(int), cudaMemcpyDeviceToHost);
 
