@@ -24,6 +24,7 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
     if (tid == 0) {
         s[blockSize] = atomicAdd(global_counter, 1);
         s[0] = 0;
+        s[blockSize+1] = 0;
     }
 
     __syncthreads();
@@ -45,10 +46,10 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
         blockStatuses[blockId].aggregate = s[0];
 
         if (blockId == 0) {
-            blockStatuses[blockId].status = STATUS_P;
+            atomicCAS((int*)&blockStatuses[blockId].status, STATUS_X, STATUS_P);
             blockStatuses[blockId].prefix_sum = 0;
         } else {
-            blockStatuses[blockId].status = STATUS_A;
+            atomicCAS((int*)&blockStatuses[blockId].status, STATUS_X, STATUS_A);
         }
 
         //step 3 look back
@@ -58,20 +59,21 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
         while (prevBlock >= 0) {
 
             //wait for the prev block to leave STATUS_X
-            while (blockStatuses[prevBlock].status == STATUS_X) {
+            while (atomicCAS((int*)&blockStatuses[prevBlock].status, STATUS_X, STATUS_X) == STATUS_X) {
                 //printf("block %d blockId %d prevBlock %d\n", blockIdx.x, blockId,prevBlock);
             };
 
             if (blockStatuses[prevBlock].status == STATUS_A) {
                 prefix_sum_accumulation += blockStatuses[prevBlock].aggregate;
-                /*if (blockId==2)
-                    printf("block %d found block %d in the A state, prefix_sum is now %d\n", blockId, prevBlock, blockStatuses[blockId].prefix_sum);*/
+
 
             } else if (blockStatuses[prevBlock].status == STATUS_P) {
                 blockStatuses[blockId].prefix_sum = blockStatuses[prevBlock].prefix_sum + blockStatuses[prevBlock].aggregate + prefix_sum_accumulation;
                 blockStatuses[blockId].status = STATUS_P;
-                /*if (blockId==2)
-                    printf("block %d found block %d in the P state, prefix_sum is now %d\n", blockId, prevBlock, blockStatuses[blockId].prefix_sum);*/
+
+                //we store the prefix_sul in the shared memory to ease the access for the block-scan
+                s[blockSize+1] = blockStatuses[blockId].prefix_sum;
+
                 break;
             }
             prevBlock--;
@@ -83,7 +85,7 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
     s[tid] = (tid > 0) ? buffer[id - 1] : 0;  // Initialize the first element to 0 for inclusive scan
     __syncthreads();
 
-    for (int i = 1; i < size; i *= 2) {
+    for (int i = 1; i < blockSize; i *= 2) {
         int x;
         if (i <= tid) {
             x = s[tid - i];
@@ -96,7 +98,7 @@ __global__ void decoupled_lookback_kernel(int* buffer, volatile BlockStatus* blo
 
     }
 
-    buffer[id] = s[tid] + blockStatuses[blockId].prefix_sum;
+    buffer[id] = s[tid] + s[blockSize+1];
 }
 
 void decoupled_lookback(int* buffer, int size){
@@ -115,7 +117,9 @@ void decoupled_lookback(int* buffer, int size){
     cudaMemset(blockStatuses, 0, nbBlocks*sizeof(BlockStatus));
 
     //launch kernel
-    decoupled_lookback_kernel<<<nbBlocks, blockSize, (blockSize + 1)*sizeof(int)>>>(buffer, blockStatuses, global_counter, size);
+    decoupled_lookback_kernel<<<nbBlocks, blockSize, (blockSize + 2)*sizeof(int)>>>(buffer, blockStatuses, global_counter, size);
     cudaCheckError();
 
+    cudaFree(blockStatuses);
+    cudaFree(global_counter);
 }

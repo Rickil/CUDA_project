@@ -71,8 +71,8 @@ void check_scan(int* d_predicate, int* d_scan_result, int size){
         if (h_predicate[i] != h_scan_result[i]){
             same = false;
             count++;
-            //if (count<10)
-                //printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
+            if (count<10)
+                printf("index: %d, cpu: %d, gpu: %d\n", i, h_predicate[i], h_scan_result[i]);
         }
     }
 
@@ -83,7 +83,7 @@ void check_scan(int* d_predicate, int* d_scan_result, int size){
 
 }
 
-void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size, int compact_size){
+void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size){
     std::vector<int> h_buffer(size, 0);
     cudaMemcpy(h_buffer.data(), d_buffer, size*sizeof(int), cudaMemcpyDeviceToHost);
     std::vector<int> my_h_buffer(size, 0);
@@ -92,7 +92,7 @@ void check_scatter(int *my_d_buffer, int *d_buffer, int *d_predicate, int size, 
     cudaMemcpy(h_predicate.data(), d_predicate, size*sizeof(int), cudaMemcpyDeviceToHost);
 
     constexpr int garbage_val = -27;
-    for (std::size_t i = 0; i < size; ++i) {
+    for (int i = 0; i < size; ++i) {
         if (h_buffer[i] != garbage_val) {
             h_buffer[h_predicate[i]] = h_buffer[i];
         }
@@ -136,8 +136,7 @@ __global__ void scatter_kernel(int *buffer, int *exclusive_scan,
 }
 
 // Fonction pour appeler les kernels
-void compact_image_gpu(int* d_buffer, int* d_output, int image_size, int compact_size) {
-    constexpr int garbage_val = -27;
+void compact_image_gpu(int* d_buffer, int* d_output, int image_size) {
     int *d_predicate;
     cudaMalloc(&d_predicate, image_size*sizeof(int));
     cudaMemset(d_predicate, 0, image_size*sizeof(int));
@@ -164,7 +163,7 @@ void compact_image_gpu(int* d_buffer, int* d_output, int image_size, int compact
 
     cudaMemcpy(d_output, d_buffer, image_size*sizeof(int), cudaMemcpyDeviceToDevice);
     scatter_kernel<<<gridSize, blockSize>>>(d_buffer, d_predicate, d_output, image_size);
-    //check_scatter(d_output, d_buffer_copy, d_predicate, image_size, compact_size);
+    //check_scatter(d_output, d_buffer_copy, d_predicate, image_size);
 
     cudaFree(d_predicate);
 }
@@ -316,7 +315,7 @@ void fix_image_gpu(Image& image){
 
     cudaMemcpy(d_buffer, image.buffer, image_size*sizeof(int), cudaMemcpyHostToDevice);
 
-    compact_image_gpu(d_buffer, d_output, image_size, compact_size);
+    compact_image_gpu(d_buffer, d_output, image_size);
     apply_map_to_pixels_gpu(d_output, compact_size);
 
     calculate_histogram_gpu(d_output, d_histogram, compact_size);
