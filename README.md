@@ -19,8 +19,9 @@ Welcome to the IRGPUA project, an initiative by AMDIA to address a critical issu
    - Optimize algorithms and patterns for efficient GPU processing.
 
 5. **Statistics and Sorting:**
-   - Compute the total sum of pixel values for each image.
-   - Optionally, sort the images based on their total sum.
+   - Compute the total sum of pixel values for each image using Single-pass Parallel Prefix Scan with Decoupled Look-back
+     
+   ![cuda](https://github.com/Rickil/CUDA_project/assets/38404628/78f99c27-e584-4006-8933-263d670e1b21)
 
 6. **Alternative Libraries:**
    - Implement a second, faster version using libraries such as CUB, Thrust, minimizing the use of hand-made kernels.
