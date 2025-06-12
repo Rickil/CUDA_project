@@ -2,7 +2,7 @@
 #include "pipeline.hh"
 #include "fix_cpu.cuh"
 #include "fix_gpu.cuh"
-#include "fix_gpu_perfect.cuh"
+#include "fix_thrust.cuh"
 
 #include <vector>
 #include <iostream>
@@ -62,7 +62,7 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
         // i = 20;
         // printf("image: %d\n", i);
         images[i] = pipeline.get_image(i);
-        fix_image_gpu(images[i]);
+        fix_image_thrust(images[i]);
         /*images[i] = pipeline.get_image(i);
         fix_image_cpu(images[i]);*/
         // break;
